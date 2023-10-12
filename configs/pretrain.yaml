@@ -1,0 +1,161 @@
+default: &default
+  model: &model-default
+    k: 5  # The number of GNN layers
+    att_head_num: 2  # number of attention heads of the final graph nodes' pooling
+    gnn_dim: 100  # dimension of the GNN layers
+    freeze_ent_emb: True  # Whether to freeze the entity embedding layer.
+    ie_dim: 200  # number of the hidden units of the MInt operator.
+    ie_layer_num: 1  # number of hidden layers in the MInt operator
+    cxt_node_connects_all: True  # Whether to connect the interaction node to all the retrieved KG nodes or only the linked nodes.
+    encoder_name_or_path: t5-base
+    xattn_dim_head: 64
+    xattn_heads: 8
+    xattn_every: 1
+    xattn_ff_mult: 4
+  data: &data-default
+    kg_only_use_qa_nodes: False
+    max_node_num: 200  # Max number of nodes / the threshold used to prune nodes.
+    num_dataloader_workers: 8
+    mlm_probability: 0.2
+    encoder_input: contextualized_question
+    decoder_label: answer
+  optim: &optim-default
+    # Optimization
+    loss: cross_entropy  # model type
+    optimizer: adamw  # the optimizer
+    batch_size: 256
+    max_grad_norm: 1.0  # max grad norm (0 to disable)
+    n_epochs: 100  # total number of training epochs to perform.
+    eval_batch_size: 64
+    init_range: 0.02  # stddev when initializing with normal distribution
+    redef_epoch_steps: -1
+    # Regularization:
+    dropouti: 0.2  # dropout for embedding layer
+    dropoutg: 0.2  # dropout for GNN layers
+    dropoutf: 0.2  # dropout for fully-connected layers
+    # Customized
+    fp16: True
+    dist_backend: nccl # gloo, nccl or mpi
+    batch_size: 128
+    learning_rate: 0.001
+    freeze_lm: True
+    freeze_non_lm: False
+    max_seq_len: 512
+    strategy: auto
+  misc: &misc-default
+    mode: train  # run training or evaluation
+    save_dir: ./saved_models/  # model output directory
+    save_model: 2  # 0: do not save model checkpoints. 1: save if best dev. 2: save always
+    checkpoint_path:  # The checkpoint for finetuning, or to resume training from if restore_training is set
+    restore_training: False  # Whether to restore training from the checkpoint
+    # added
+    wandb_mode: online # online, offline or disabled
+    wandb_project: mcwq
+    world_size: 1
+    fast_dev_run: False
+    log_interval: 20
+    run_name:
+    save_interval: 5
+    log_dir: logs
+    retrieve_text: False
+    prefix_ratio: 0.2
+    monitor: em
+    monitor_mode: max
+
+
+wikidata5m: &wikidata5m
+  kg: wikidata5m
+  num_relations: 828  # number of relations for wikidata5m
+  ent_emb_paths: data/wikidata5m/entity_embeddings.npy
+
+# Emebedded with T5-base encoder
+wikidata5m_langemb: &wikidata5m-langemb
+  kg: wikidata5m
+  num_relations: 828  # number of relations for wikidata5m
+  ent_emb_paths: data/wikidata5m/entity_embeddings_t5_base.npy
+
+
+# Wikidataset for pretrain (made from the cross links on Wikipedia)
+wiki_pretrain: &wiki-pretrain
+  dataset: wiki
+  train_statements: data/kilt/statement/train.statement.jsonl
+  train_adj: data/kilt/adj_data/train
+  dev_statements: data/kilt/statement/dev.statement.jsonl
+  dev_adj: data/kilt/adj_data/dev
+  test_statements: data/kilt/statement/test.statement.jsonl
+  test_adj: data/kilt/adj_data/test
+  legacy_adj: False
+
+wikitop_pretrain: &wikitop-pretrain
+  dataset: wikitop
+  train_statements: data/wikitop/statement/train.statement.jsonl
+  train_adj: data/wikitop/adj_data/train
+  dev_statements: data/wikitop/statement/test.statement.jsonl
+  dev_adj: data/wikitop/adj_data/test
+  legacy_adj: False
+
+pretrain_wiki:
+  <<: *default
+  data:
+    <<: *data-default
+    <<: *wikidata5m
+    <<: *wiki-pretrain 
+    encoder_input: context_prefix
+    decoder_label: context_suffix
+    max_node_num: 30
+  optim:
+    <<: *optim-default
+    max_seq_len: 512
+    batch_size: 24
+    freeze_lm: True
+    freeze_non_lm: False
+  misc:
+    <<: *misc-default
+    fast_dev_run: False
+
+pretrain_wikitop: &pretrain-wikitop
+  <<: *default
+  model: &pretrain-wikitop-model
+    <<: *model-default
+    k: 8
+    gnn_dim: 256
+    ie_dim: 256
+  data: &pretrain-wikitop-data
+    <<: *data-default
+    <<: *wikidata5m
+    <<: *wikitop-pretrain
+    encoder_input: context_prefix
+    decoder_label: context_suffix
+    max_node_num: 30
+    has_choice_graph: False  # does each choice has a subgraph?
+  optim: &pretrain-wikitop-optim
+    <<: *optim-default
+    max_seq_len: 312
+    batch_size: 56
+    freeze_lm: True
+    freeze_non_lm: False
+    n_epochs: 20
+    learning_rate: 0.0005
+  misc:
+    <<: *misc-default
+    fast_dev_run: False
+    prefix_ratio: 0.0
+
+pretrain_wikitop_langemb:
+  <<: *pretrain-wikitop
+  data:
+    <<: *pretrain-wikitop-data
+    <<: *wikidata5m-langemb
+
+pretrain_wikitop_xl: &pretrain-wikitop-xl
+  <<: *pretrain-wikitop
+  model:
+    <<: *pretrain-wikitop-model
+    encoder_name_or_path: google/flan-t5-xl
+    xattn_every: 2
+    xattn_ff_mult: 1
+  optim:
+    <<: *pretrain-wikitop-optim
+    batch_size: 8
+    strategy: deepspeed_stage_3_offload
+    optimizer: deepspeed_offload

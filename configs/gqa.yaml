@@ -1,0 +1,246 @@
+default: &default
+  model: &model-default
+    k: 5  # The number of GNN layers
+    att_head_num: 2  # number of attention heads of the final graph nodes' pooling
+    gnn_dim: 100  # dimension of the GNN layers
+    freeze_ent_emb: True  # Whether to freeze the entity embedding layer.
+    ie_dim: 200  # number of the hidden units of the MInt operator.
+    ie_layer_num: 1  # number of hidden layers in the MInt operator
+    cxt_node_connects_all: True  # Whether to connect the interaction node to all the retrieved KG nodes or only the linked nodes.
+    encoder_name_or_path: t5-base
+    xattn_dim_head: 64
+    xattn_heads: 8
+    xattn_every: 1
+    xattn_ff_mult: 4
+  data: &data-default
+    kg_only_use_qa_nodes: False
+    max_node_num: 200  # Max number of nodes / the threshold used to prune nodes.
+    num_dataloader_workers: 8
+    mlm_probability: 0.2
+    encoder_input: contextualized_question
+    decoder_label: answer
+    has_choice_graph: False  # does each choice has a subgraph?
+  optim: &optim-default
+    # Optimization
+    loss: cross_entropy  # model type
+    optimizer: adamw  # the optimizer
+    batch_size: 256
+    max_grad_norm: 1.0  # max grad norm (0 to disable)
+    n_epochs: 100  # total number of training epochs to perform.
+    init_range: 0.02  # stddev when initializing with normal distribution
+    redef_epoch_steps: -1
+    # Regularization:
+    dropouti: 0.2  # dropout for embedding layer
+    dropoutg: 0.2  # dropout for GNN layers
+    dropoutf: 0.2  # dropout for fully-connected layers
+    # Customized
+    fp16: True
+    dist_backend: nccl # gloo, nccl or mpi
+    learning_rate: 0.0001
+    freeze_lm: True
+    freeze_non_lm: False
+    max_seq_len: 128
+    strategy: auto
+  misc: &misc-default
+    mode: train  # run training or evaluation
+    save_dir: ./saved_models/  # model output directory
+    save_model: 2  # 0: do not save model checkpoints. 1: save if best dev. 2: save always
+    checkpoint_path:  # The checkpoint for finetuning, or to resume training from if restore_training is set
+    restore_training: False  # Whether to restore training from the checkpoint
+    # added
+    wandb_mode: online # online, offline or disabled
+    wandb_project: gqa
+    world_size: 1
+    fast_dev_run: False
+    log_interval: 20
+    run_name:
+    save_interval: 5
+    log_dir: logs
+    retrieve_text: False
+    prefix_ratio: 0.2
+    monitor: em
+    monitor_mode: max
+
+
+wikidata5m: &wikidata5m
+  kg: wikidata5m
+  num_relations: 828  # number of relations for wikidata5m
+  ent_emb_paths: data/wikidata5m/entity_embeddings.npy
+
+wikidata5m_langemb: &wikidata5m-langemb
+  kg: wikidata5m
+  num_relations: 828
+  ent_emb_paths: data/wikidata5m/entity_embeddings_t5_base.npy
+
+gqa_fintune: &gqa-finetune
+  dataset: gqa
+  train_statements: data/gqa/statement/train.jsonl
+  train_adj: data/gqa/adj/train
+  dev_statements: data/gqa/statement/validation.jsonl
+  dev_adj: data/gqa/adj/validation
+  test_statements: data/gqa/statement/test.jsonl
+  test_adj: data/gqa/adj/test
+  legacy_adj: False
+
+# Retrieved graphs (instead of gold ones)
+gqa_retrieve: &gqa-retrieve
+  dataset: gqa
+  train_statements: data/gqa/statement/train.jsonl
+  train_adj: data/gqa-retrieval/adj/train
+  dev_statements: data/gqa/statement/validation.jsonl
+  dev_adj: data/gqa-retrieval/adj/validation
+  test_statements: data/gqa/statement/test.jsonl
+  test_adj: data/gqa-retrieval/adj/test
+  legacy_adj: False
+
+# F. warmup & frozen LM
+finetune_gqa: &finetune-gqa
+  <<: *default
+  model:
+    <<: *model-default
+    k: 8
+    gnn_dim: 256
+    ie_dim: 256
+  data: &data-finetune-gqa
+    <<: *data-default
+    <<: *wikidata5m
+    <<: *gqa-finetune
+    encoder_input: question
+    decoder_label: answer
+  optim: &optim-finetune-gqa
+    <<: *optim-default
+    batch_size: 128
+    freeze_lm: True
+    freeze_non_lm: False
+    learning_rate: 0.0005
+    n_epochs: 120
+  misc:
+    <<: *misc-default
+    checkpoint_path: artifacts/pretrained/lit_wikitop_epoch24.ckpt
+
+# C. No warmup, no frozen LM
+finetune_gqa_xwxf: &finetune-gqa-xwxf
+  <<: *finetune-gqa
+  optim: &optim-finetune-gqa-xwxf
+    <<: *optim-finetune-gqa
+    freeze_lm: False
+  misc:
+    <<: *misc-default
+
+# D. Warmup, no frozen LM
+finetune_gqa_xf: &finetune-gqa-xf
+  <<: *finetune-gqa
+  optim: &optim-finetune-gqa-xf
+    <<: *optim-finetune-gqa
+    freeze_lm: False
+
+# E. No warmup, frozen LM
+finetune_gqa_xw: &finetune-gqa-xw
+  <<: *finetune-gqa
+  misc:
+    <<: *misc-default
+
+
+# F-Ret: warmup & frozen LM
+finetune_gqa_ret:
+  <<: *finetune-gqa
+  data:
+    <<: *data-finetune-gqa
+    <<: *gqa-retrieve
+  optim:
+    <<: *optim-finetune-gqa
+    batch_size: 128
+
+# C-Ret: No warmup, no frozen LM
+finetune_gqa_xwxf_ret:
+  <<: *finetune-gqa-xwxf
+  data:
+    <<: *data-finetune-gqa
+    <<: *gqa-retrieve
+  optim:
+    <<: *optim-finetune-gqa-xwxf
+    batch_size: 96
+
+# D-Ret: Warmup, no frozen LM
+finetune_gqa_xf_ret:
+  <<: *finetune-gqa-xf
+  data:
+    <<: *data-finetune-gqa
+    <<: *gqa-retrieve
+  optim:
+    <<: *optim-finetune-gqa-xf
+    batch_size: 96
+
+# E-Ret: No warmup, frozen LM
+finetune_gqa_xw_ret:
+  <<: *finetune-gqa-xw
+  data:
+    <<: *data-finetune-gqa
+    <<: *gqa-retrieve
+  optim:
+    <<: *optim-finetune-gqa
+    batch_size: 128
+
+
+finetune_gqa_lmonly: &finetune-gqa-lmonly
+  <<: *finetune-gqa
+  optim:
+    <<: *optim-finetune-gqa
+    batch_size: 128
+    max_seq_len: 128
+    learning_rate: 0.0001
+    freeze_lm: False
+  data:
+    <<: *data-default
+    <<: *wikidata5m
+    <<: *gqa-finetune
+    encoder_input: question
+    decoder_label: answer
+  misc:
+    <<: *misc-default
+    no_graph: True
+
+
+# Verbalize subgraphs as context for LM only finetuning
+finetune_gqa_lmonly_contextualized: &finetune-gqa-lmonly-contextualized
+  <<: *finetune-gqa-lmonly
+  data:
+    <<: *data-default
+    <<: *wikidata5m
+    <<: *gqa-finetune
+    encoder_input: contextualized_question
+    decoder_label: answer
+
+
+finetune_gqa_langemb:
+  <<: *finetune-gqa
+  data:
+    <<: *data-default
+    <<: *wikidata5m-langemb
+    <<: *gqa-finetune
+    encoder_input: question
+    decoder_label: answer
+  misc:
+    <<: *misc-default
+    checkpoint_path: artifacts/pretrained/lit_wikitop_e20_langemb.ckpt
+
+
+test_gqa:
+  <<: *finetune-gqa
+  misc:
+    <<: *misc-default
+    checkpoint_path: saved_models/gqa-epoch=99-step=5300.ckpt
+
+test_gqa_lmonly:
+  <<: *finetune-gqa-lmonly
+  misc:
+    <<: *misc-default
+    no_graph: True
+    checkpoint_path: saved_models/gqa-lmonly-epoch=98-step=5247.ckpt
+
+test_gqa_lmonly_contextualized:
+  <<: *finetune-gqa-lmonly-contextualized
+  misc:
+    <<: *misc-default
+    no_graph: True
+    checkpoint_path: saved_models/gqa-lmonly-ctx-pfeiffer-epoch=80-step=4293.ckpt

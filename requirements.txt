@@ -1,0 +1,16 @@
+absl-py
+adapter-transformers 
+click
+deepspeed
+einops
+einops-exts
+evaluate
+numpy
+pytest
+pytorch-lightning
+pyyaml
+rouge_score
+sentencepiece
+torch
+tqdm
+transformers
