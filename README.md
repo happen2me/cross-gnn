@@ -10,6 +10,8 @@ pip install -r requirements.txt
 conda install pyg pytorch-scatter -c pyg
 ```
 
+**Note**: Data preprocessing & graph creation is to be added to this repository.
+
 ## Architecture
 
 Upon an encoder-decoder transformer-architectured language backbone:
